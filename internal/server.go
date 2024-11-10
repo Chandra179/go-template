@@ -19,10 +19,11 @@ func StartServer() {
 	// -------------
 	// Database
 	// -------------
-	_, err := configs.NewDatabase(cfg)
+	db, err := configs.NewDatabase(cfg)
 	if err != nil {
 		log.Fatalf("Could not initialize database: %v", err)
 	}
+	fmt.Println(db)
 	//---------------
 	// Http Server
 	// --------------
