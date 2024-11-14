@@ -1,68 +1,83 @@
 package workerpool
 
 import (
-	"context"
+	"fmt"
+	"log"
 	"sync"
+	"time"
 )
 
-type TaskFunc func(ctx context.Context) (interface{}, error)
+// WorkerPool represents the worker pool, with a task channel size that can be buffered or unbuffered.
+type WorkerPool struct {
+	taskCh   chan func() error
+	resultCh chan error
+	wg       sync.WaitGroup
+}
 
-func worker(ctx context.Context, taskCh <-chan TaskFunc, resultCh chan<- interface{}, errCh chan<- error, wg *sync.WaitGroup) {
-	defer wg.Done()
+// NewWorkerPool creates a new worker pool with specified number of workers and an optional buffer size for the task channel.
+func NewWorkerPool(numWorkers int, bufferSize int) *WorkerPool {
+	// Initialize the channel with the provided buffer size, 0 means unbuffered
+	taskCh := make(chan func() error, bufferSize)
+	pool := &WorkerPool{
+		taskCh:   taskCh,
+		resultCh: make(chan error),
+	}
 
-	for task := range taskCh {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			result, err := task(ctx)
-			if err != nil {
-				select {
-				case errCh <- err:
-				default:
-				}
-				return
-			}
-			select {
-			case resultCh <- result:
-			case <-ctx.Done():
-				return
-			}
-		}
+	// Start workers
+	for i := 0; i < numWorkers; i++ {
+		pool.wg.Add(1)
+		go pool.worker(i)
+	}
+	return pool
+}
+
+// AddTask adds a task to the worker pool. If the task channel is closed, it logs an error.
+func (p *WorkerPool) AddTask(task func() error) {
+	select {
+	case p.taskCh <- task:
+		// Successfully added task
+	default:
+		log.Println("Warning: Task channel is closed or full, could not add task.")
 	}
 }
 
-func workerPool(ctx context.Context, numWorkers int, tasks []TaskFunc) (chan interface{}, error) {
-	taskCh := make(chan TaskFunc)
-	resultCh := make(chan interface{}, len(tasks)) // Buffered channel with capacity equal to the number of tasks
-	errCh := make(chan error, 1)
+// Results returns the result channel for processing errors or results.
+func (p *WorkerPool) Results() <-chan error {
+	return p.resultCh
+}
 
-	var wg sync.WaitGroup
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go worker(ctx, taskCh, resultCh, errCh, &wg)
-	}
-
+// Close stops accepting new tasks, waits for workers to complete, and closes resultCh
+func (p *WorkerPool) Close(timeout time.Duration) error {
+	close(p.taskCh)
+	done := make(chan struct{})
 	go func() {
-		defer close(taskCh)
-		for _, task := range tasks {
-			select {
-			case taskCh <- task:
-			case <-ctx.Done():
-				return
-			}
-		}
+		p.wg.Wait()
+		close(done)
 	}()
-
-	go func() {
-		wg.Wait()
-		close(resultCh)
-	}()
-
 	select {
-	case err := <-errCh:
-		return resultCh, err
-	case <-ctx.Done():
-		return resultCh, nil
+	case <-done:
+		close(p.resultCh)
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("worker pool shutdown timed out after %v", timeout)
 	}
+}
+
+// worker processes tasks and sends results to resultCh
+func (p *WorkerPool) worker(workerID int) {
+	defer p.wg.Done()
+	for task := range p.taskCh {
+		if task == nil {
+			log.Printf("Worker %d received a nil task, skipping\n", workerID)
+			continue
+		}
+		err := task()
+		select {
+		case p.resultCh <- err:
+		default:
+			// If resultCh is unbuffered and no listener, skip
+			log.Printf("Worker %d processed task with error: %v\n", workerID, err)
+		}
+	}
+	log.Printf("Worker %d exiting\n", workerID)
 }
