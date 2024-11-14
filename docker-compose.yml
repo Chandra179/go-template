@@ -21,5 +21,32 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  db-migration:
+    image: "amacneil/dbmate:2.17"
+    restart: "on-failure"
+    volumes:
+      - ./:/myapp
+    working_dir: /myapp
+    depends_on:
+      postgres:
+        condition: service_started
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@localhost:5432/myapp?sslmode=disable
+      - DBMATE_MIGRATIONS_DIR=/myapp/resources/pgsql/migrations
+      - DBMATE_NO_DUMP_SCHEMA=true
+      - DBMATE_VERBOSE=true
+      - DBMATE_STRICT=true
+      - DBMATE_WAIT=true
+      - DBMATE_WAIT_TIMEOUT=60s
+    command: up
+
+  adminer:
+    image: adminer:latest
+    depends_on:
+      postgres:
+        condition: service_started
+    ports:
+      - "9000:8080"
+    
 volumes:
   postgres_data:
