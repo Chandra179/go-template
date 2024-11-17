@@ -2,156 +2,185 @@ package workerpool
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 )
 
-// TestBasicWorkerPool tests if the worker pool processes tasks correctly.
-func TestBasicWorkerPool(t *testing.T) {
-	numWorkers := 3
-	bufferSize := 10
-	wp := New(numWorkers, bufferSize)
-
-	// Create a task that does nothing and always succeeds.
-	taskID := 1
-	task := Task{
-		ID: taskID,
-		Func: func(ctx context.Context) error {
-			// Simulate some work
-			time.Sleep(100 * time.Millisecond)
-			return nil
-		},
+func TestWorkerPool_New(t *testing.T) {
+	tests := []struct {
+		name       string
+		numWorkers int
+		bufferSize int
+	}{
+		{"valid configuration", 5, 10},
+		{"zero buffer size", 3, 0},
+		{"minimum workers", 1, 5},
 	}
 
-	// Start the worker pool
-	wp.Start(context.Background())
-
-	// Submit the task
-	wp.Submit(task)
-
-	// Wait for the worker pool to process the task
-	wp.Stop()
-
-	// Collect any errors (if any)
-	errors := wp.CollectErrors()
-	if len(errors) > 0 {
-		t.Fatalf("Expected no errors, but got: %v", errors)
-	}
-}
-
-// TestWorkerPoolErrorHandling tests if the worker pool correctly reports errors.
-func TestWorkerPoolErrorHandling(t *testing.T) {
-	numWorkers := 3
-	bufferSize := 10
-	wp := New(numWorkers, bufferSize)
-
-	// Create a task that always fails.
-	taskID := 2
-	task := Task{
-		ID: taskID,
-		Func: func(ctx context.Context) error {
-			// Simulate a failure
-			return fmt.Errorf("task %d failed", taskID)
-		},
-	}
-
-	// Start the worker pool
-	wp.Start(context.Background())
-
-	// Submit the task
-	wp.Submit(task)
-
-	// Wait for the worker pool to process the task
-	wp.Stop()
-
-	// Collect any errors (should contain the error from the task)
-	errors := wp.CollectErrors()
-	if len(errors) == 0 {
-		t.Fatal("Expected an error, but got none")
-	}
-
-	// Just check that the error is not nil
-	if errors[0] == nil {
-		t.Fatal("Expected a non-nil error, but got nil")
-	}
-}
-
-// TestWorkerPoolContextCancellation tests if workers stop processing when the context is canceled.
-func TestWorkerPoolContextCancellation(t *testing.T) {
-	numWorkers := 2
-	bufferSize := 5
-	wp := New(numWorkers, bufferSize)
-
-	// Create a task that simulates a long-running operation
-	task := Task{
-		ID: 3,
-		Func: func(ctx context.Context) error {
-			select {
-			case <-time.After(500 * time.Millisecond):
-				return nil
-			case <-ctx.Done():
-				// Simulate cancellation
-				return fmt.Errorf("task %d was cancelled", 3)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wp := New(tt.numWorkers, tt.bufferSize)
+			if wp == nil {
+				t.Fatal("expected non-nil WorkerPool")
 			}
-		},
+			if wp.numWorkers != tt.numWorkers {
+				t.Errorf("expected %d workers, got %d", tt.numWorkers, wp.numWorkers)
+			}
+			if cap(wp.tasks) != tt.bufferSize {
+				t.Errorf("expected task buffer size %d, got %d", tt.bufferSize, cap(wp.tasks))
+			}
+		})
 	}
+}
 
-	// Create a context with a timeout that will cancel the task
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
+func TestWorkerPool_SuccessfulTasks(t *testing.T) {
+	wp := New(3, 10)
+	ctx := context.Background()
 
 	// Start the worker pool
 	wp.Start(ctx)
 
-	// Submit the task
-	wp.Submit(task)
+	// Create successful tasks
+	numTasks := 5
+	taskResults := make(chan int, numTasks)
 
-	// Wait for the worker pool to process the task (it should be cancelled due to timeout)
-	wp.Stop()
-
-	// Collect any errors (should contain the cancellation error)
-	errors := wp.CollectErrors()
-	if len(errors) == 0 {
-		t.Fatal("Expected an error, but got none")
+	for i := 0; i < numTasks; i++ {
+		taskID := i
+		wp.Submit(Task{
+			ID: taskID,
+			Func: func(ctx context.Context) error {
+				taskResults <- taskID
+				return nil
+			},
+		})
 	}
 
-	// Just check that the error is not nil
-	if errors[0] == nil {
-		t.Fatal("Expected a non-nil error, but got nil")
+	// Stop the pool and wait for completion
+	wp.Stop()
+
+	// Check results
+	close(taskResults)
+	completedTasks := make(map[int]bool)
+	for id := range taskResults {
+		completedTasks[id] = true
+	}
+
+	if len(completedTasks) != numTasks {
+		t.Errorf("expected %d completed tasks, got %d", numTasks, len(completedTasks))
+	}
+
+	// Verify no errors were reported
+	errors := wp.CollectErrors()
+	if len(errors) != 0 {
+		t.Errorf("expected no errors, got %d errors", len(errors))
 	}
 }
 
-// TestWorkerPoolShutdown tests if the pool shuts down correctly.
-func TestWorkerPoolShutdown(t *testing.T) {
-	numWorkers := 2
-	bufferSize := 5
-	wp := New(numWorkers, bufferSize)
+func TestWorkerPool_ErrorHandling(t *testing.T) {
+	wp := New(2, 5)
+	ctx := context.Background()
 
-	// Create a task that simulates some work
-	task := Task{
-		ID: 4,
-		Func: func(ctx context.Context) error {
-			time.Sleep(50 * time.Millisecond)
-			return nil
-		},
+	wp.Start(ctx)
+
+	expectedError := errors.New("task error")
+	numTasks := 3
+
+	// Submit tasks that will fail
+	for i := 0; i < numTasks; i++ {
+		wp.Submit(Task{
+			ID: i,
+			Func: func(ctx context.Context) error {
+				return expectedError
+			},
+		})
 	}
 
-	// Start the worker pool
-	wp.Start(context.Background())
-
-	// Submit multiple tasks
-	for i := 0; i < 5; i++ {
-		task.ID = i
-		wp.Submit(task)
-	}
-
-	// Stop the worker pool (this should wait for all tasks to finish)
 	wp.Stop()
-
-	// Collect any errors (there should be none)
 	errors := wp.CollectErrors()
-	if len(errors) > 0 {
-		t.Fatalf("Expected no errors, but got: %v", errors)
+
+	if len(errors) != numTasks {
+		t.Errorf("expected %d errors, got %d", numTasks, len(errors))
+	}
+
+	for _, err := range errors {
+		if !strings.Contains(err.Error(), expectedError.Error()) {
+			t.Errorf("expected error containing %q, got %q", expectedError, err)
+		}
+	}
+}
+
+func TestWorkerPool_ContextCancellation(t *testing.T) {
+	wp := New(2, 5)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	wp.Start(ctx)
+
+	// Submit a task that will block
+	wp.Submit(Task{
+		ID: 1,
+		Func: func(ctx context.Context) error {
+			select {
+			case <-time.After(100 * time.Millisecond):
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	})
+
+	wp.Stop()
+	errors := wp.CollectErrors()
+
+	if len(errors) != 1 {
+		t.Errorf("expected 1 error due to context cancellation, got %d", len(errors))
+	}
+
+	if len(errors) > 0 && !strings.Contains(errors[0].Error(), "context deadline exceeded") {
+		t.Errorf("expected deadline exceeded error, got %v", errors[0])
+	}
+}
+
+func TestWorkerPool_ConcurrentTasks(t *testing.T) {
+	wp := New(4, 10)
+	ctx := context.Background()
+
+	wp.Start(ctx)
+
+	numTasks := 20
+	completedTasks := make(chan int, numTasks)
+
+	// Submit tasks that simulate work with random delays
+	for i := 0; i < numTasks; i++ {
+		taskID := i
+		wp.Submit(Task{
+			ID: taskID,
+			Func: func(ctx context.Context) error {
+				time.Sleep(time.Duration(taskID%3) * time.Millisecond)
+				completedTasks <- taskID
+				return nil
+			},
+		})
+	}
+
+	wp.Stop()
+	close(completedTasks)
+
+	completed := make(map[int]bool)
+	for id := range completedTasks {
+		completed[id] = true
+	}
+
+	if len(completed) != numTasks {
+		t.Errorf("expected %d completed tasks, got %d", numTasks, len(completed))
+	}
+
+	// Verify all tasks were processed
+	for i := 0; i < numTasks; i++ {
+		if !completed[i] {
+			t.Errorf("task %d was not completed", i)
+		}
 	}
 }
