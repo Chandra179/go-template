@@ -1,0 +1,27 @@
+#
+# This multi-stage build uses only the required binary and files to run migration-up in the final image.
+# No other feature from dbmate is needed.
+#
+FROM amacneil/dbmate:2.17 AS dbmate
+
+# https://github.com/GoogleContainerTools/distroless
+FROM gcr.io/distroless/static-debian12:nonroot
+
+# Copy dbmate binary for migration up.
+COPY --from=dbmate /usr/local/bin/dbmate /usr/local/bin/dbmate
+# Copy our SQL migration files.
+COPY resources/pgsql/migrations /migrations
+
+# Default env for dbmate
+ENV DBMATE_MIGRATIONS_DIR=/migrations
+ENV DBMATE_NO_DUMP_SCHEMA=true
+ENV DBMATE_VERBOSE=true
+ENV DBMATE_STRICT=true
+ENV DBMATE_WAIT=true
+ENV DBMATE_WAIT_TIMEOUT=60s
+
+# REPLACE THIS DATABASE_URL WITH DEPLOYMENT-SPECIFIC DSN
+ENV DATABASE_URL=SET_DSN_AS_DATABASE_URL_ENV_VAR
+
+# On docker this is the default execution command
+ENTRYPOINT ["/usr/local/bin/dbmate", "up"]

@@ -21,4 +21,4 @@
 vendor/
 
 # env variables (IGNORE ENV AS THIS REPO IS TEMPLATE)
-# .env
+.env
