@@ -71,3 +71,7 @@ See the [`/docs`](docs/README.md) directory for examples.
 Supporting tools for this project. Note that these tools can import code from the `/pkg` and `/internal` directories.
 
 See the [`/tools`](tools/README.md) directory for examples.
+
+### `/scripts`
+
+`.sh` for automating repetitive tasks, configuring environments, running sequences of commands, or managing software builds and deployments.
