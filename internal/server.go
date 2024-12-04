@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/Chandra179/go-template/configs"
+	"github.com/Chandra179/go-template/internal/db"
 )
 
 func StartServer() {
@@ -19,11 +20,11 @@ func StartServer() {
 	// -------------
 	// Database
 	// -------------
-	db, err := configs.NewDatabase(cfg)
+	dbase, err := db.NewDatabase(cfg.DbConfig)
 	if err != nil {
 		log.Fatalf("Could not initialize database: %v", err)
 	}
-	fmt.Println(db)
+	fmt.Println(dbase)
 	//---------------
 	// Http Server
 	// --------------
